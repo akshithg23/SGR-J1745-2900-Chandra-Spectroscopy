@@ -7,7 +7,7 @@ This repository collects the project scripts for Chandra ObsID 14946. The public
 - `reduce.sh`, `specextract_compat.py`, `source.reg`, and `background.reg` cover CIAO reprocessing and spectrum extraction.
 - `inspect_events.py`, `repair_spa660_exposure.py`, and `reextract_spa660.py` check the event selections and support the alternate extraction steps used on SciServer.
 - `fit_xspec.py` fits the extracted spectra with PyXspec and exports the fit summaries, model curves, and plots.
-- `polishing/` contains supplementary aperture, pileup, and XSPEC checks, including optional ChaRT/MARX and restricted-band checks.
+- `polish_ciao.sh`, `polish_xspec.py`, and `project_chart.sh` contain supplementary aperture, pileup, and spectral checks.
 - `build_final_report.py` builds the report from the verified results archive. It shares layout functions with `build_report.py`, the earlier draft builder. Student identifiers were removed from the repository copies.
 
 ## Verify the reported fits
