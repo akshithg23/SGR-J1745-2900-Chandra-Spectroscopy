@@ -1,4 +1,4 @@
-"""Fit ObsID 14946 with PyXspec after running reduce.sh in CIAO."""
+"""Fit an ObsID 14946 product directory with PyXspec."""
 
 import argparse
 import csv
@@ -42,6 +42,9 @@ def check_responses():
         raise ValueError("ARF does not cover the complete 1–10 keV flux band")
     with fits.open("magnetar.rmf") as rmf:
         matrix = next(hdu.data for hdu in rmf[1:] if hdu.name.endswith("MATRIX"))
+        for key in ("ENERG_LO", "ENERG_HI"):
+            if matrix[key].shape != cor[key].shape or not np.allclose(matrix[key], cor[key]):
+                raise ValueError("RMF and ARF use different incident-energy grids")
         if matrix["ENERG_LO"][0] > 1 or matrix["ENERG_HI"][-1] < 10:
             raise ValueError("RMF does not cover the complete 1–10 keV flux band")
     np.savetxt("psf_fraction.csv", np.column_stack([energy[band], frac, 1 / frac]), delimiter=",",
@@ -58,7 +61,7 @@ def check_responses():
 def interval(parameter):
     low, high, status = parameter.error
     value = parameter.values[0]
-    valid = all(flag == "F" for flag in status) and low <= value <= high and low < high
+    valid = status == "FFFFFFFFF" and low < value < high
     return {
         "value": value,
         "interval_68": [low, high] if valid else None,
@@ -183,7 +186,7 @@ def cflux_fit(absorption, continuum, values, fixed, unabsorbed, seed, baseline_c
     estimate["chi_square"] = Fit.statistic
     estimate["delta_chi_from_baseline"] = Fit.statistic - baseline_chi
     if abs(estimate["delta_chi_from_baseline"]) > 0.05:
-        print("Review the cflux re-fit. Its χ² differs from the baseline by more than 0.05.")
+        raise RuntimeError("The cflux fit differs from the baseline χ² by more than 0.05")
     return estimate
 
 
@@ -277,9 +280,13 @@ def write_comparison(results):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--products", type=Path, default=Path(__file__).resolve().parent / "products")
+    parser.add_argument("--overwrite-results", action="store_true",
+                        help="Allow replacement of existing fit products in this run directory")
     parser.add_argument("--rea-crosscheck", action="store_true",
                         help="also fit free-column phabs models with angr/bcmc for comparison to Rea et al.")
     args = parser.parse_args()
+    if (args.products / "fit_results.json").exists() and not args.overwrite_results:
+        parser.error("Fit outputs already exist. Use a separate run directory or --overwrite-results")
     os.chdir(args.products)
     Path("fit_results.json").unlink(missing_ok=True)
     response = check_responses()

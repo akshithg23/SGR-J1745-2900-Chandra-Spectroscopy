@@ -1,130 +1,213 @@
-# SPA660 Project 8 analysis instructions
+# Live demonstration and replay
 
-The Level 2 archive event file and the archive figures are included. The response-based results require CIAO with CALDB and HEASoft with PyXspec. Use a lab Linux environment or a [SciServer HEASARC container](https://heasarc.gsfc.nasa.gov/docs/sciserver/) with the HEASARC data volume mounted. Unzip this bundle in a writable directory and open a Terminal there.
+The read-only archive checks ran on the saved data in Python. The CIAO, DS9, HEASoft and XSPEC commands below are student replay instructions. A fresh end-to-end run, the optional W-statistic fits, and installation on the demonstration laptop are **NOT VERIFIED**. Capture logs and keep the archived and fresh results separate.
 
-## Task A · Reprocess and inspect the observation
+## 1. Set up the laptop
+
+Use Linux or a tested WSL2 Ubuntu environment. CIAO has no native Windows build. On Windows, an administrator can run `wsl --install -d Ubuntu` and restart, then configure the Linux user. Use WSLg for DS9 and XSPEC graphics where available. A native Windows DS9 can instead open the exported FITS image and region files. Test the GUI before the demonstration. [Microsoft WSL GUI guide](https://learn.microsoft.com/en-us/windows/wsl/tutorials/gui-apps)
+
+Install Linux [Miniforge](https://github.com/conda-forge/miniforge#install) first if needed. Use separate environments to avoid mixing CIAO and HEASoft libraries. These candidate pinned Conda commands require package availability for the laptop architecture. If solving fails, use the official older release installers or a preconfigured Linux lab environment and record the actual versions. The reference CALDB version comes from the saved reprocessing history.
 
 ```bash
-conda activate ciao
-bash reduce.sh
+conda create -n spa-ciao -c https://cxc.cfa.harvard.edu/conda/ciao -c conda-forge \
+  'ciao=4.17' pyciao ciao-contrib 'caldb_main=4.12.4' ds9 astropy matplotlib
+conda create -n spa-xspec -c https://heasarc.gsfc.nasa.gov/FTP/software/conda/ \
+  -c conda-forge 'heasoft=6.36' astropy numpy matplotlib
+conda activate spa-ciao
+ciaover -v
+command -v ds9 dmcoords chandra_repro specextract download_chandra_obsid
+python -c 'import astropy, numpy, matplotlib, psf'
+conda activate spa-xspec
+command -v xspec ftgrouppha
+python -c 'from xspec import Xset; import astropy, numpy, matplotlib; print(Xset.version)'
 ```
 
-The script uses a writable copy of the complete observation from `/FTP/chandra/data/byobsid/6/14946` when present. Otherwise, these are the download and reprocessing commands. The current CIAO contributed script is named `download_chandra_obsid`.
+Target CIAO 4.17.0, CALDB 4.12.4 and XSPEC 12.15.1 / PyXspec 2.1.5. A newer stack is a new replay configuration. Record its versions and compare the results rather than assuming equality. HEASoft 6.37+ can also require a separate XSPEC model-data download. [CIAO 4.17 install](https://cxc.cfa.harvard.edu/ciao4.17/download/conda.html) · [HEASoft install](https://heasarc.gsfc.nasa.gov/docs/software/conda.html) · [Version matrix](https://heasarc.gsfc.nasa.gov/docs/software/lheasoft/versions.html) · [XSPEC model data](https://heasarc.gsfc.nasa.gov/docs/software/xspec/faq.html)
 
-On a rerun, the script reuses the completed event file recorded in `products/event_path.txt` if it is still present. On SciServer, the extraction launcher detects the Python 3.11 syntax error in `ciao_contrib/_tools/merging.py` and runs with a temporary quote-only fix when needed.
+## 2. Retrieve, reprocess and inspect
+
+Run from the repository root after applying the audit patch. Use a fresh working copy for reduction. In the commands below, `products/` is the CIAO working directory and `products_replay/` is the fresh physical-coordinate replay. Keep `products_verified/` for the original saved archive.
 
 ```bash
+conda activate spa-ciao
 download_chandra_obsid 14946
-mkdir -p products
-punlearn chandra_repro
-chandra_repro indir=14946 outdir=products/repro verbose=2 clobber=yes
-```
-
-`reduce.sh` finds the sole reprocessed event file, saves its relative path in `products/event_path.txt`, and generates the following image. The bins are half an ACIS sky pixel. Inspect the full image and the extraction regions in DS9.
-
-```bash
+bash reduce.sh --preprocess-only
 evt=$(cat products/event_path.txt)
+dmlist "$evt[EVENTS]" header,clean
+dmlist "$evt[GTI]" data
+dmkeypar "$evt[EVENTS]" OBS_ID echo=yes
+dmkeypar "$evt[EVENTS]" TIMEDEL echo=yes
 dmcopy "$evt[ccd_id=7,energy=1000:8000][bin x=4057.5:4097.5:0.5,y=4089.0:4129.0:0.5]" \
-    products/field_1_8keV.fits clobber=yes
-ds9 products/field_1_8keV.fits -scale log -zoom to fit \
-    -regions load source.reg -regions load background.reg
+  products/field_1_8keV.fits clobber=yes
+ds9 products/field_1_8keV.fits -scale log -zoom to fit
 ```
 
-In DS9, set the coordinate readout to **FK5** in **degrees** and check that the bright peak is centred within the annulus at RA 266.4173708°, Dec −29.0082889°. Cross-check Sgr A* to the northwest at approximately RA 266.416837°, Dec −29.007810°. Compare the image peak with the adopted position before adjusting any aperture. DS9 region properties show the centre and both radii. Review the same overlays in JS9 if running through SciServer without a DS9 display. The image axes in the report are sky offsets from the adopted position.
+The reprocessing script saves `products/reprocess.log`, `products/event_header.txt`, `products/ciao_version.txt`, and the path to a new ObsID 14946 event file. Show CCD 7, the GTI and the live time. The half-pixel sky bins are 0.246 arcsec. The separate saved report PNG uses 0.25 arcsec bins. Use the source position in ICRS and identify the adjacent Sgr A* candidate in DS9. Load the physical region overlays after step 3B to match the reported selection. Confirm the cutout WCS and the six background exclusions in the GUI. An image histogram for aperture counts uses reconstructed ENERGY, whereas the fit uses PI channels.
 
-To assess pileup, the script creates a **native-pixel, full-band CCD 7 image** from the standard reprocessed events and runs:
+The preprocess script attempts `pileup_map` on a native-pixel full-energy CCD 7 image and records `products/pileup_summary.txt`. A failure is logged and can be diagnosed separately. The output is a diagnostic in counts/frame. Use the core and annulus maximum and keep the map and log with the event file, frame time and version. Avoid interpreting this as a directly fitted pileup fraction. [CIAO pileup guide](https://cxc.cfa.harvard.edu/ciao/ahelp/pileup_map.html)
+
+## 3. Extract, inspect and record
+
+Choose the matching observation aspect solution from the files below. Prefer the reprocessed solution where available. If there are multiple segments, supply a CIAO stack such as `@products/asol.lis` containing all matching segments of one processing version. Check each header and coverage. Do not combine duplicates of the same time interval.
 
 ```bash
-dmcopy "$evt[ccd_id=7][bin x=3072.5:5120.5:1,y=3072.5:5120.5:1]" \
-    products/ccd7_native.fits clobber=yes
-pileup_map products/ccd7_native.fits products/pileup_map.fits clobber=yes
+find 14946 products/repro -name '*asol*.fits*' -print
+read -r -p 'Matching aspect file or @stack: ' asol
+test -s "${asol#@}"
+punlearn asphist
+asphist infile="$asol" outfile=products/asphist_ccd7.fits \
+  evtfile="$evt[ccd_id=7]" clobber=no
+dmlist 'products/asphist_ccd7.fits[ASPHIST][cols DURATION]' data
+```
+
+### 3A. Standard CIAO route for diagnosis
+
+Inspect the two region expressions before running `specextract`. The files in the repository preserve the original FK5 labels. The published workflow actually used the numeric centres in the FITS ICRS sky WCS. The distinction can move events across the narrow aperture edges. A standard region extraction with `correctpsf=yes` applies CIAO's `arfcorr` and writes to `products/`.
+
+```bash
+dmlist "$evt[ccd_id=7][sky=region(source.reg)]" counts
+dmlist "$evt[ccd_id=7][sky=region(background.reg)]" counts
+bash reduce.sh products/asphist_ccd7.fits
+```
+
+If either count is zero, save the exact command, `dmlist` output, tool log, region file, and relevant headers. Check that `evt` is the full reprocessed event file, that it contains CCD 7, that region text is readable, and that the DS9 positions lie inside the image. Compare with the physical filters from 3B. A nonempty file on disk can still be an empty spectrum. The original failed run's command and intermediate PHA are missing, so the reason for its zero counts remains unresolved.
+
+### 3B. Physical-coordinate replay of the reported method
+
+This is the candidate replay of the alternative route. It uses the same numerical centre, aperture radii, masks, and method as the archived event selections. It regenerates its own point-source responses for the same observation before applying a single REEF correction. The original response headers show an unweighted `specextract` call with `correctpsf=no` and an explicit CCD 7 aspect histogram. Exact commands from that run were not archived. Compare new results to the saved archive instead of assuming identity.
+
+```bash
+python reextract_spa660.py select --select-only --output products_replay
+dmlist "products_replay/source_events.fits[EVENTS]" counts
+dmlist "products_replay/background_events.fits[EVENTS]" counts
+ds9 products/field_1_8keV.fits -scale log -zoom to fit \
+  -regions load products_replay/source_physical.reg \
+  -regions load products_replay/background_physical.reg
+
+punlearn dmextract
+dmextract "products_replay/source_events.fits[bin pi]" \
+  products_replay/magnetar.pi opt=pha1 clobber=no
+punlearn dmextract
+dmextract "products_replay/background_events.fits[bin pi]" \
+  products_replay/magnetar_bkg.pi opt=pha1 clobber=no
+
+dmlist "$evt[ccd_id=7][sky=region(products_replay/source_physical.reg)]" counts
+dmlist "$evt[ccd_id=7][sky=region(products_replay/background_physical.reg)]" counts
+find products/repro -name '*bpix*.fits*' -o -name '*msk*.fits*'
+read -r -p 'Matching reprocessed bad-pixel file: ' bpix
+read -r -p 'Matching observation mask file: ' msk
+test -s "$bpix" && test -s "$msk"
+punlearn specextract
+python specextract_compat.py \
+  infile="$evt[ccd_id=7][sky=region(products_replay/source_physical.reg)]" \
+  asp=products/asphist_ccd7.fits badpixfile="$bpix" mskfile="$msk" \
+  outroot=products_replay/point_response refcoord="266.4173708 -29.0082889" \
+  weight=no correctpsf=no bkgresp=no grouptype=NONE clobber=no verbose=2 \
+  2>&1 | tee products_replay/response.log
+cp products_replay/point_response.arf products_replay/magnetar.arf
+cp products_replay/point_response.rmf products_replay/magnetar.rmf
+
 punlearn dmcoords
 dmcoords "$evt" asol=none option=cel celfmt=deg ra=266.4173708 dec=-29.0082889
-sx=$(pget dmcoords x)
-sy=$(pget dmcoords y)
-dmstat "products/pileup_map.fits[sky=circle($sx,$sy,1.52439)]" centroid=no
-dmstat "products/pileup_map.fits[sky=annulus($sx,$sy,1.52439,4.06504)]" centroid=no
+theta=$(pget dmcoords theta)
+phi=$(pget dmcoords phi)
+python make_reef_arf.py products_replay/magnetar.arf products_replay/magnetar.corr.arf \
+  --theta-arcmin "$theta" --phi-deg "$phi" | tee products_replay/reef.log
+python reextract_spa660.py verify --output products_replay
+punlearn dmgroup
+dmgroup infile=products_replay/magnetar.pi outfile=products_replay/magnetar_grp.pi \
+  grouptype=NUM_CTS grouptypeval=50 xcolumn=CHANNEL ycolumn=COUNTS clobber=no
+python inspect_events.py "$evt" --output products_replay/event_check
+
+for name in magnetar.pi magnetar_grp.pi magnetar_bkg.pi; do
+  for key in EXPOSURE BACKSCAL BACKFILE RESPFILE ANCRFILE; do
+    printf '%s %s ' "$name" "$key"
+    dmkeypar "products_replay/$name[SPECTRUM]" "$key" echo=yes
+  done
+done
+dmlist products_replay/magnetar.rmf blocks
+dmlist products_replay/magnetar.corr.arf cols
 ```
 
-Inspect the map with the source annulus overlaid and read the two maximum values in `products/pileup_summary.txt`. The summary uses physical sky pixels and runs after spectral extraction. If the summary reports an error, inspect the map separately before interpreting pileup. The map units are counts per frame. CIAO gives rough guide values of 0.02, 0.1 and 0.2 counts/frame for approximately 1%, 5% and 10% pileup. Record the core and annular maxima. Rea et al. estimated about 5–15% pileup across their ACIS observations and chose a 0.75″ inner cut. The 2.0″ outer radius limits diffuse background and contamination from Sgr A*, about 2.4″ away. State whether the map supports excluding the core, and treat any appreciable annular signal as possible residual pileup.
+Stop if any command fails or the CIAO filters disagree with the selected event lists. Confirm the aspect histogram duration against the CCD 7 GTI-derived live time, source and background counts channel by channel, and the response source location. BACKSCAL is computed from the masked sky areas in this replay. Inspect the footprint, chip edge and bad pixels before relying on a geometric area. Different sky regions require new spectra and response validation, with a new aperture correction where appropriate. The uncorrected ARF should lack `PSF_FRAC`. The corrected ARF should contain exactly one correction. `pget dmcoords theta` returns arcminutes even when the printed screen label uses arcseconds. The helper records its CALDB file basename and angles. [asphist](https://cxc.cfa.harvard.edu/ciao/ahelp/asphist.html) · [specextract](https://cxc.cfa.harvard.edu/ciao4.17/ahelp/specextract.html) · [REEF API](https://cxc.cfa.harvard.edu/ciao/ahelp/psf.html) · [dmcoords](https://cxc.cfa.harvard.edu/ciao/ahelp/dmcoords.html)
 
-## Task B · Extract and check the response
+The older `products_fast` path and `repair_spa660_exposure.py` are historical. The repair utility only checks band totals approximately and cannot rescue a zero-count spectrum. The physical replay above uses `--select-only` and no dependency on `products_fast`.
 
-`source.reg` and `background.reg` contain the FK5 annuli and the six circular background exclusions. The script runs:
+## 4. Verify and refit the saved products
+
+Run the validator first. Then copy only the response and PHA inputs into a fresh run directory. Keep the original archive for side-by-side comparison. For the fresh CIAO extraction, pass `--products products_replay` instead.
 
 ```bash
-punlearn specextract
-python specextract_compat.py infile="$evt[ccd_id=7][sky=region(source.reg)]" \
-    bkgfile="$evt[ccd_id=7][sky=region(background.reg)]" outroot=products/magnetar \
-    refcoord="266.4173708 -29.0082889" weight=no correctpsf=yes binarfcorr=0.25 \
-    bkgresp=no grouptype=NUM_CTS binspec=50 bkg_grouptype=NONE clobber=yes verbose=2
+conda activate spa-xspec
+unzip SPA660_Results_verified.zip
+python verify_products.py products_verified
+mkdir fits_replay
+cp products_verified/{magnetar.pi,magnetar_grp.pi,magnetar_bkg.pi,magnetar.rmf,magnetar.arf,magnetar.corr.arf} fits_replay/
+python fit_xspec.py --products fits_replay --rea-crosscheck
 ```
 
-Use `magnetar_grp.pi` with `magnetar_bkg.pi`, `magnetar.rmf` and **`magnetar.corr.arf`**. CIAO uses `dmgroup` through `specextract` for a minimum of 50 source counts per group. XSPEC ignores bad-quality bins. Check the usable groups at both band edges and record the number of noticed bins. Inspect the event header for the actual reprocessing CALDB version, and inspect `BACKSCAL` and `EXPOSURE` for the PHA files. The archive geometric ratio of 0.069 is a cross-check for the CIAO extraction.
+Expect the replay directory to contain six `.xcm` sessions, `xspec.log`, `fit_results.json`, `psf_fraction.csv`, spectra/residual PNGs, unfolded/flux-density CSVs, and comparison files. Compare actual parameters, error statuses, χ²/dof, and retained energy coverage to the archived JSON and log. The saved-data check is an executed audit. All new fits in this step are **NOT VERIFIED** until the students run them.
 
-`correctpsf=yes` invokes `arfcorr`. The energy-dependent annular fraction is the encircled PSF fraction within 2.0″ minus that within 0.75″ for a concentric annulus. The corrected effective area is `SPECRESP_corrected = SPECRESP_uncorrected × PSF_FRAC`. The multiplicative aperture factor is `1 / PSF_FRAC`; the corrected ARF already accounts for it during the fit. The fitting script checks the corrected ARF against the uncorrected ARF and writes `psf_fraction.csv` and the 4 keV fraction and factor to `fit_results.json`. Record **[f(4 keV) = ?; 1/f(4 keV) = ?; 1–10 keV fraction range = ?]**. The narrow annulus warrants checking the fraction with finer PSF sampling or a simulated PSF before quoting precise fluxes. A separate ARF is needed if the extraction geometry changes.
-
-The included archive count-rate spectrum uses 0.25 keV bins and peaks in the 3.50–3.75 keV bin, with the strongest signal around 3–5 keV and a steep drop above 6 keV. The spectrum remains in detector space. The reprocessed **PI** spectrum plot is generated as `products/grouped_spectrum.png`. To regenerate the field and the fixed-width count-rate figure from the reprocessed events, run this in the HEASoft environment:
-
-```bash
-python inspect_events.py "$(cat products/event_path.txt)" --output products/event_check
-```
-
-## Task C · Fit the four cases in XSPEC
-
-```bash
-conda activate heasoft
-python fit_xspec.py --rea-crosscheck
-```
-
-Use the Python interpreter that imports `xspec`, `astropy`, `numpy` and `matplotlib`. The script runs blackbody and power-law fits with a free column and with `nH=10.3` fixed, in XSPEC units of 10²² cm⁻². It sets `abund angr`, `xsect bcmc` and `TBABSVERSION 2`. **TBabs uses its own cross-sections.** The optional flag fits each continuum again with `phabs`, which honors `xsect bcmc` and matches the absorption prescription of Rea et al. more closely. Use the free-column fits for the measured columns. The frozen fits are a sensitivity check, with the same blackbody reference column imposed on both continua.
-
-To inspect a fit interactively, launch XSPEC inside `products`. For the blackbody free-column fit the commands are:
+For the live XSPEC display, change into `fits_replay`, launch `xspec`, and enter:
 
 ```text
-data 1:1 magnetar_grp.pi
+@tbabs_bbody_free.xcm
+show all
+fit
+error 1.0 1-3
+setplot energy
+cpd /xs
+plot data delchi
+flux 1 10
+@tbabs_powerlaw_free.xcm
+show all
+fit
+error 1.0 1-3
+plot data delchi
+```
+
+Also restore `tbabs_bbody_fixed.xcm`, `tbabs_powerlaw_fixed.xcm`, `phabs_bbody_free.xcm`, and `phabs_powerlaw_free.xcm` for the complete comparison. The two fixed sessions intentionally share the blackbody reference column (10.3 in XSPEC units). For the fixed cases, use `error maximum 10.0 1.0 2-3` and interpret intervals conditional on fit quality. Use `cflux*absorption*continuum` for absorbed flux and `absorption*cflux*continuum` for intrinsic flux. The script fixes the continuum norm and integration bounds and profiles the log flux. Convert log flux to linear units and multiply the intrinsic flux and its interval limits by `4π(8.3 kpc in cm)²`. Record which interval is statistical and which uncertainties (distance, response, model) were held fixed. [XSPEC cflux](https://heasarc.gsfc.nasa.gov/docs/software/xspec/manual/XSmodelCflux.html)
+
+## 5. Optional grouping and PSF sensitivity tests
+
+The archived grouped χ² fit ignores the large group crossing 1 keV and the poor-quality final group. In the archived RMF, the 1–10 keV PI-centre channels are 69–685. Validate the channel endpoints for any new RMF. There are 325 zero-background channels out of 617 in the archived nominal band. To test use of the edges, first use the ungrouped PHA in a separate analysis and inspect the low-count behaviour. Grouping by a fixed minimum background count can help reduce the many empty-background bins in W-statistic. Predefine a criterion and report its sensitivity for both continua rather than choosing a grouping after inspecting fit preferences.
+
+```bash
+cd fits_replay
+ftgrouppha infile=magnetar.pi backfile=magnetar_bkg.pi \
+  outfile=magnetar_wstat.pi grouptype=bmin groupscale=1 \
+  minchannel=69 maxchannel=685 clobber=no
+xspec
+```
+
+```text
+data 1:1 magnetar_wstat.pi
 backgrnd 1 magnetar_bkg.pi
 response 1 magnetar.rmf
 arf 1 magnetar.corr.arf
+statistic cstat
 abund angr
 xsect bcmc
 xset TBABSVERSION 2
 setplot energy
 ignore bad
 ignore **-1.0 10.0-**
-statistic chi
-weight standard
 model tbabs*bbody & 10.3 & 0.9 & 2.0e-4
 fit
-error 1.0 1-3
-show fit
-cpd /xs
+show all
 plot data delchi
-plot eufspec
+model tbabs*powerlaw & 17.3 & 4.2 & 0.1
+fit
+show all
+plot data delchi
 ```
 
-For the frozen run, use `newpar 1 10.3`, `freeze 1`, `fit` and `error 1.0 2-3`. For the power law, replace the model line with `model tbabs*powerlaw & 17.3 & 4.2 & 0.1` and run the free and fixed sequences again. These starting parameters initialize the fit. They are separate from the output measurements. `error 1.0` profiles the other free parameters at Δχ² = 1 for each one-parameter 68.3% interval. A fixed column has no fitted interval. Read the error status in `fit_results.json` and the fit log. Investigate pegged or unconverged intervals before quoting them.
+With a supplied Poisson background, XSPEC's `cstat` uses W-statistic. Check the retained edge groups and sparse background, including the final group, and compare actual confidence intervals and residuals. W-statistic per degree of freedom is not a χ² probability. This optional experiment is **NOT VERIFIED** and does not replace the archived fit. [Low-count spectra](https://heasarc.gsfc.nasa.gov/docs/software/xspec/manual/node395.html) · [ftgrouppha](https://heasarc.gsfc.nasa.gov/docs/software/lheasoft/help/ftgrouppha.html)
 
-The fitting script replaces the continuum amplitude with `cflux` for each flux measurement. For the absorbed flux it uses `cflux*tbabs*bbody` (or `cflux*tbabs*powerlaw`) and profiles parameter 3 with `error 1.0 3`. For the unabsorbed flux it uses `tbabs*cflux*bbody` (or `tbabs*cflux*powerlaw`) and profiles parameter 4 with `error 1.0 4`. Both use frozen 1 and 10 keV bounds, a frozen positive continuum normalization, and the baseline fit's free or frozen column. Convert each log-flux limit separately using 10 raised to that limit. Check that the two cflux fits recover the baseline χ² within numerical tolerance before using their results.
+Run the archived-response aperture sensitivity from the repo root with `python polish_xspec.py sensitivity --products products_verified` in the HEASoft environment. Preserve its outputs in `polish_checks/`. The optional `band` action changes the integrated flux interval while keeping the fitted groups. In CIAO, `bash polish_ciao.sh arfcorr` produces a shared-CALDB method cross-check, not independent PSF calibration. `project_chart.sh` is optional and takes matching ChaRT ray files plus an explicit aspect file. MARX, the rays, and the model for the ray simulation are additional inputs. These supplementary commands remain **NOT VERIFIED** here. A uniform effective-area multiplier is a normalization sensitivity test, not a measurement of PSF uncertainty.
 
-`L_X = (8.24 × 10⁴⁵ cm²) F_unabs` at 8.3 kpc. Apply the same factor to the flux limits with distance fixed. The bolometric `bbody` luminosity is `10³⁹ K (8.3/10)² erg s⁻¹`, where K is the XSPEC normalization. The apparent radius is `sqrt(L_bol / (4π σ_SB T⁴))` with `T = 1.16045 × 10⁷ K × (kT / keV)`. Report the radius from the blackbody case you discuss and compare `L_X / (4.9 × 10³³ erg s⁻¹)` for the same case. For a radius interval, profile the equivalent `bbodyrad` normalization or propagate joint kT and normalization samples. Their fitted errors are generally correlated.
+## 6. Capture and submit the evidence
 
-`*_flux_density.csv` tabulates absorbed and intrinsic **F_E** in erg cm⁻² s⁻¹ keV⁻¹ and provides the basis for the 4 keV interpolations in the JSON. The `*_eufspec.csv` points are model-dependent unfolded estimates. The script distinguishes the maximum of F_E in the fitted band from the intrinsic blackbody maximum at 2.82144 kT. If the peak falls at a band edge, report a band-edge maximum. A pure power law has no isolated intrinsic spectral peak. The intrinsic blackbody peak in **E F_E** is 3.92069 kT if reporting energy output per logarithmic interval.
+Save the full reprocessed event file, aspect solution identifiers and histogram, a CIAO version record, extraction commands and logs, masked region files, pileup map and log, ARF/RMF/PHA files, and XSPEC log and sessions from the actual demonstration. Record any differences before the students edit the report. Show the full 1–10 keV event counts separately from the retained fitted groups.
 
-## Task D · Finish the report
-
-Use the four `tbabs_*_fit.png` panels to check the residuals, particularly at higher energies. Compare χ² and the residual structure at equal degrees of freedom for the free blackbody and free power law, then repeat for the frozen pair. The two continua are non-nested. A smaller χ² ranks the fits on these data but does not by itself establish a significant preference. If both are poor or the difference is small, describe that outcome.
-
-Use `rea_comparison.csv` to fill the reference table. The percentage difference is signed and uses the reference value as the denominator. Rea et al. report separate joint columns for blackbody and power law (10.3 and 17.3 in units of 10²² cm⁻²). Their 14946 temperature and index are epoch-specific. The reference intrinsic flux is derived from their quoted luminosity. Flux and luminosity comparisons for the power law use the published blackbody benchmark and are marked accordingly. Frozen columns are excluded from the percentage differences.
-
-Fill the report placeholders from `fit_results.json`, `rea_comparison.csv` and `pileup_summary.txt`. Use the selected `*_fit.png` for Figure 3, and its `*_flux_density.png` for Figure 4. In the interpretation, state the observed preference or lack of preference, what the fitted column implies for soft X-ray absorption, the luminosity and spin-down ratio, and which fit values agree with Rea et al. within their uncertainties. A small apparent thermal radius supports localized emission if the blackbody is acceptable. Discuss one-epoch versus joint fitting, the absorption prescription, PSF and background systematics, residual pileup and covariance between absorption and temperature or index.
-
-The PDF source is `build_report.py`. After filling the text and inserting the fit figures, rebuild on Windows with Calibri and ReportLab installed using `python build_report.py SPA660_Report.pdf`. Replace the archive figures and count summary only if you intend to report the reprocessed measurements.
-
-The scripts and report placeholders are prepared. The CIAO and XSPEC jobs need to run in the configured analysis environment before using the fit results.
-
-## Documentation
-
-- [Rea et al. (2013), Table 1 and §2.3](https://arxiv.org/pdf/1307.6331)
-- [CIAO reprocessing](https://cxc.harvard.edu/ciao/ahelp/chandra_repro.html), [pileup map](https://cxc.harvard.edu/ciao/ahelp/pileup_map.html) and [point-source spectroscopy](https://cxc.harvard.edu/ciao/threads/pointlike/)
-- [XSPEC TBabs](https://heasarc.gsfc.nasa.gov/docs/software/xspec/manual/XSmodelTbabs.html), [phabs](https://heasarc.gsfc.nasa.gov/docs/software/xspec/manual/XSmodelPhabs.html), [cflux](https://heasarc.gsfc.nasa.gov/docs/software/xspec/manual/XSmodelCflux.html) and [confidence intervals](https://heasarc.gsfc.nasa.gov/docs/software/xspec/manual/node107.html)
+Share the original audited `SPA660_Results_verified.zip` with the examiner in the course submission system or a Drive folder restricted to the examiner. The original FITS history includes system-specific paths. Give the examiner access and test the link with the intended permissions. Add that authorized link in the submission notes or repository documentation according to the course policy. Keep the official Chandra download link for raw data. Submit one group PDF and confirm that its page 1 GitHub link opens the correct public repo.

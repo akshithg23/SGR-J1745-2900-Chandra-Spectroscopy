@@ -1,4 +1,4 @@
-"""Validate the ObsID 14946 PI products and restore missing CCD 7 exposure."""
+"""Legacy exposure-only check for products_fast; use reextract_spa660.py for channel validation."""
 
 import json
 from pathlib import Path
@@ -63,7 +63,7 @@ def main():
                 raise ValueError(f"{name} counts disagree with the independent event extraction")
             if not np.isfinite(scale) or scale <= 0:
                 raise ValueError(f"{name} has invalid BACKSCAL")
-            if not np.isfinite(old) or (old > 0 and not matching_exposure(old, exposure)):
+            if not np.isfinite(old) or old < 0 or (old > 0 and not matching_exposure(old, exposure)):
                 raise ValueError(f"{name} exposure conflicts with the verified live time")
             records[name] = (old, scale)
 
@@ -77,11 +77,15 @@ def main():
         with fits.open(folder / name, mode="update") as hdus:
             pha = hdus["SPECTRUM"]
             pha.header["EXPOSURE"] = (exposure, "CCD 7 exposure in seconds")
+            pha.header["LIVETIME"] = exposure
+            if "COUNT_RATE" in pha.columns.names:
+                pha.data["COUNT_RATE"] = pha.data["COUNTS"] / exposure
             pha.header.add_history(f"Original EXPOSURE was {old:g} s.")
             pha.header.add_history("Exposure restored from CCD 7 GTIs times DTCOR.")
             pha.header.add_history("Checked against the CCD 7 aspect histogram duration.")
             pha.add_checksum()
-    print(f"All three spectra now have verified positive exposure near {exposure:.3f} s.")
+    print(f"All three spectra have positive exposure consistent with {exposure:.3f} s.")
+    print("This legacy repair does not verify individual PI channels.")
 
 
 if __name__ == "__main__":

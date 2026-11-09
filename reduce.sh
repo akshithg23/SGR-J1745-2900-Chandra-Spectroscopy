@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# Run from any directory with a current CIAO and Chandra CALDB active.
+# Use an active CIAO/CALDB environment. An explicit aspect file or @stack is
+# required for extraction when there is no unique reprocessed aspect solution.
 set -euo pipefail
 cd -- "$(dirname -- "$0")"
 
-for tool in chandra_repro specextract dmcopy; do
+aspect=${1:-}
+if (( $# > 1 )); then
+    echo "Usage: bash reduce.sh [--preprocess-only | ASPECT_FILE_OR_@STACK]" >&2
+    exit 2
+fi
+for tool in chandra_repro ciaover dmlist dmcopy punlearn; do
     command -v "$tool" >/dev/null || { echo "Activate CIAO first: missing $tool" >&2; exit 1; }
 done
 
@@ -42,18 +48,6 @@ punlearn dmcopy
 dmcopy "$evt[ccd_id=7,energy=1000:8000][bin x=4057.5:4097.5:0.5,y=4089.0:4129.0:0.5]" \
     products/field_1_8keV.fits clobber=yes
 
-# Use the complete PI spectrum for grouping and response generation.
-punlearn specextract
-python specextract_compat.py infile="$evt[ccd_id=7][sky=region(source.reg)]" \
-    bkgfile="$evt[ccd_id=7][sky=region(background.reg)]" outroot=products/magnetar \
-    refcoord="266.4173708 -29.0082889" weight=no correctpsf=yes binarfcorr=0.25 \
-    bkgresp=no grouptype=NUM_CTS binspec=50 bkg_grouptype=NONE clobber=yes verbose=2 \
-    2>&1 | tee products/extraction.log
-
-for product in magnetar_grp.pi magnetar_bkg.pi magnetar.rmf magnetar.arf magnetar.corr.arf; do
-    test -s "products/$product" || { echo "Missing spectral product: products/$product" >&2; exit 1; }
-done
-
 # The pileup map is a diagnostic, independent of PI and response generation.
 # Use native ACIS pixels and the full energy range.
 pileup_diagnostic() {
@@ -77,3 +71,34 @@ if ! pileup_diagnostic 2>&1 | tee products/pileup_summary.txt; then
     echo "Pileup summary unavailable. Check products/pileup_summary.txt before interpreting pileup." >&2
 fi
 echo "Open products/field_1_8keV.fits in DS9 or JS9 with source.reg and background.reg."
+[[ "$aspect" == "--preprocess-only" ]] && exit 0
+
+if [[ -z "$aspect" ]]; then
+    shopt -s nullglob
+    candidates=(products/repro/*asol*.fits products/repro/*asol*.fits.gz)
+    if (( ${#candidates[@]} != 1 )); then
+        echo "Pass the matching aspect solution, @stack, or CCD 7 aspect histogram to reduce.sh." >&2
+        exit 2
+    fi
+    aspect=${candidates[0]}
+fi
+[[ -s "${aspect#@}" ]] || { echo "Missing aspect input: $aspect" >&2; exit 1; }
+
+# Standard CIAO route. Keep its outputs separate from the archived REEF run.
+punlearn specextract
+python specextract_compat.py infile="$evt[ccd_id=7][sky=region(source.reg)]" \
+    bkgfile="$evt[ccd_id=7][sky=region(background.reg)]" outroot=products/magnetar \
+    asp="$aspect" refcoord="266.4173708 -29.0082889" weight=no correctpsf=yes binarfcorr=0.25 \
+    bkgresp=no grouptype=NUM_CTS binspec=50 bkg_grouptype=NONE clobber=yes verbose=2 \
+    2>&1 | tee products/extraction.log
+
+for product in magnetar_grp.pi magnetar_bkg.pi magnetar.rmf magnetar.arf magnetar.corr.arf; do
+    test -s "products/$product" || { echo "Missing spectral product: products/$product" >&2; exit 1; }
+done
+for pha in magnetar_grp.pi magnetar_bkg.pi; do
+    punlearn dmstat
+    dmstat "products/$pha[SPECTRUM][cols COUNTS]" centroid=no
+    counts=$(pget dmstat out_sum)
+    awk -v counts="$counts" 'BEGIN {exit !(counts+0 > 0)}' ||
+        { echo "Empty spectrum: products/$pha. See WORKFLOW.md before fitting." >&2; exit 1; }
+done
