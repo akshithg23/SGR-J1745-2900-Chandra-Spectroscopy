@@ -66,7 +66,8 @@ good = (e >= 1) & (e <= 10)
 if not np.all(np.isfinite(f[good]) & (f[good] > 0) & (f[good] <= 1)):
     raise ValueError('Invalid arfcorr fractions. Review coordinate/image interpretation.')
 print('ARF-interpolated f_PSF(4 keV) =', np.interp(4, e, f))
-print('Saved REEF reference at 4 keV = 0.1077')
+reef = np.loadtxt('products_verified/reef_fraction.csv', delimiter=',', skiprows=1)
+print('Saved REEF reference at 4 keV =', np.interp(4, reef[:, 0], reef[:, 1]))
 np.savetxt('polish_checks/arfcorr_fraction.csv', np.column_stack((e, f)),
            delimiter=',', header='energy_keV,annular_fraction', comments='')
 PY

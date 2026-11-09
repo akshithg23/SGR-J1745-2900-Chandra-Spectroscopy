@@ -4,15 +4,9 @@ import argparse
 import json
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS, FITSFixedWarning
-from matplotlib.colors import PowerNorm
-from matplotlib.patches import Circle
 import warnings
 
 
@@ -41,15 +35,24 @@ def aperture_area(offset_masks):
 
 
 def main():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import PowerNorm
+    from matplotlib.patches import Circle
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("events", type=Path)
-    parser.add_argument("--output", type=Path, default=ROOT)
+    parser.add_argument("--output", type=Path, default=Path("event_check"))
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     plt.rcParams.update({"font.size": 11, "axes.spines.top": False, "axes.spines.right": False})
     with fits.open(args.events) as hdus:
         events = hdus["EVENTS"]
         header = events.header
+        if int(header["OBS_ID"]) != 14946:
+            raise ValueError("Expected ObsID 14946")
         columns = [name.lower() for name in events.columns.names]
         xy_cols = [columns.index(axis) + 1 for axis in ("x", "y")]
         with warnings.catch_warnings():
@@ -104,7 +107,7 @@ def main():
         ax.add_patch(Circle((0, 0), r, fill=False, color="#f5e276", lw=1.0, ls="--"))
     for mx, my, size in offset_masks:
         ax.add_patch(Circle((mx, my), size, fill=False, color="#eeeeee", lw=0.8, ls=":"))
-    ax.annotate("SGR J1745−2900", xy=(-1.4, -1.4), xytext=(-9.3, -8.5), color="white",
+    ax.annotate("SGR J1745−2900", xy=(0, 0), xytext=(-9.3, -8.5), color="white",
                 arrowprops={"arrowstyle": "-", "color": "white"}, fontsize=9)
     ax.annotate("Sgr A*", xy=(sgra_x, sgra_y), xytext=(3.8, 5.5), color="white",
                 arrowprops={"arrowstyle": "-", "color": "white"}, fontsize=9)

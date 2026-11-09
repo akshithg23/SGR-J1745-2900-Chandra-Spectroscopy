@@ -18,8 +18,8 @@ FAST = Path("products_fast")
 APERTURES = {"source": (0.75, 2.0), "background": (2.5, 8.0)}
 
 
-def select_events():
-    OUTPUT.mkdir(exist_ok=True)
+def select_events(output, select_only):
+    output.mkdir(exist_ok=True)
     evt = Path(Path("products/event_path.txt").read_text().strip())
     with fits.open(evt) as hdus:
         events = hdus["EVENTS"]
@@ -49,6 +49,8 @@ def select_events():
             warnings.simplefilter("ignore", FITSFixedWarning)
             wcs = WCS(header, keysel=["pixel"], colsel=xy_cols, naxis=2)
         scale = np.abs(wcs.wcs.cdelt) * 3600
+        if not np.isclose(scale[0], scale[1], rtol=1e-8):
+            raise ValueError("Circular SKY regions require square pixels")
         origin = wcs.all_world2pix([MAGNETAR], 1)[0]
         x = (data["x"] - origin[0]) * scale[0]
         y = (data["y"] - origin[1]) * scale[1]
@@ -68,9 +70,13 @@ def select_events():
         }
         for label, (inner, outer) in APERTURES.items():
             selection = (radius >= inner) & (radius < outer)
+            region = [f"annulus({origin[0]:.12f},{origin[1]:.12f},"
+                      f"{inner/scale[0]:.12f},{outer/scale[0]:.12f})"]
             if label == "background":
                 for mx, my, size in offset_masks:
                     selection &= np.hypot(x - mx, y - my) >= size
+                    region.append(f"-circle({origin[0]+mx/scale[0]:.12f},"
+                                  f"{origin[1]+my/scale[1]:.12f},{size/scale[0]:.12f})")
             selected = data[selection]
             energy = selected["energy"]
             band_count = int(np.count_nonzero((energy >= 1000) & (energy < 10000)))
@@ -79,25 +85,31 @@ def select_events():
             meta[f"{label}_events_1_10"] = band_count
             meta["backscale"][label] = areas[label] / (scale.prod() * 8192**2)
             events.data = selected
-            hdus.writeto(OUTPUT / f"{label}_events.fits", overwrite=True, checksum=True)
+            hdus.writeto(output / f"{label}_events.fits", overwrite=False, checksum=True)
+            (output / f"{label}_physical.reg").write_text(
+                "physical\n" + "\n".join(region) + "\n", encoding="ascii", newline="\n"
+            )
             print(f"{label}: {len(selected)} total events, {band_count} in 1–10 keV")
-    independent = json.loads((FAST / "event_check/event_summary.json").read_text())
-    for label in APERTURES:
-        if meta[f"{label}_events_1_10"] != independent[f"{label}_counts_1_10"]:
-            raise ValueError(f"{label} selection differs from the independent event check")
-    for filename in ("magnetar.arf", "magnetar.corr.arf", "magnetar.rmf", "reef_fraction.csv"):
-        shutil.copyfile(FAST / filename, OUTPUT / filename)
-    shutil.copytree(FAST / "event_check", OUTPUT / "event_check", dirs_exist_ok=True)
-    (OUTPUT / "extraction_summary.json").write_text(json.dumps(meta, indent=2) + "\n")
+    if not select_only:
+        independent = json.loads((FAST / "event_check/event_summary.json").read_text())
+        for label in APERTURES:
+            if meta[f"{label}_events_1_10"] != independent[f"{label}_counts_1_10"]:
+                raise ValueError(f"{label} selection differs from the independent event check")
+        for filename in ("magnetar.arf", "magnetar.corr.arf", "magnetar.rmf", "reef_fraction.csv"):
+            shutil.copyfile(FAST / filename, output / filename)
+        shutil.copytree(FAST / "event_check", output / "event_check", dirs_exist_ok=True)
+    (output / "extraction_summary.json").write_text(json.dumps(meta, indent=2) + "\n")
     print(f"Verified CCD 7 exposure: {exposure:.3f} s")
 
 
-def verify_pi():
-    meta = json.loads((OUTPUT / "extraction_summary.json").read_text())
+def verify_pi(output):
+    meta = json.loads((output / "extraction_summary.json").read_text())
+    if meta["obsid"] != 14946 or not 0 < meta["exposure_s"] < np.inf:
+        raise ValueError("Invalid ObsID or exposure in extraction summary")
     for label, filename in (("source", "magnetar.pi"), ("background", "magnetar_bkg.pi")):
-        pi = fits.getdata(OUTPUT / f"{label}_events.fits", "EVENTS", memmap=False)["PI"]
+        pi = fits.getdata(output / f"{label}_events.fits", "EVENTS", memmap=False)["PI"]
         expected = np.bincount(pi.astype(int))
-        with fits.open(OUTPUT / filename, mode="update") as hdus:
+        with fits.open(output / filename, mode="update") as hdus:
             spectrum = hdus["SPECTRUM"]
             channel = spectrum.data["CHANNEL"].astype(int)
             observed = spectrum.data["COUNTS"]
@@ -109,12 +121,19 @@ def verify_pi():
             if observed.sum() != len(pi):
                 raise ValueError(f"{filename} does not cover every selected PI channel")
             header = spectrum.header
+            old_exposure = float(header.get("EXPOSURE", 0))
+            if not np.isfinite(old_exposure) or old_exposure < 0:
+                raise ValueError(f"{filename} has invalid exposure")
+            if old_exposure and not np.isclose(old_exposure, meta["exposure_s"], rtol=0.01):
+                raise ValueError(f"{filename} has a conflicting positive exposure")
             header["EXPOSURE"] = (meta["exposure_s"], "CCD 7 GTI live time in seconds")
             header["LIVETIME"] = meta["exposure_s"]
             header["ONTIME"] = meta["ontime_s"]
             header["BACKSCAL"] = (meta["backscale"][label], "Aperture area / ACIS sky area")
             header["AREASCAL"] = 1.0
             header["POISSERR"] = True
+            if "COUNT_RATE" in spectrum.columns.names:
+                spectrum.data["COUNT_RATE"] = observed / meta["exposure_s"]
             if label == "source":
                 header["BACKFILE"] = "magnetar_bkg.pi"
                 header["RESPFILE"] = "magnetar.rmf"
@@ -130,8 +149,13 @@ def verify_pi():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("stage", choices=("select", "verify"))
+    parser.add_argument("--output", type=Path, default=OUTPUT)
+    parser.add_argument("--select-only", action="store_true",
+                        help="Write selected events and metadata without the legacy products_fast inputs")
     args = parser.parse_args()
     if args.stage == "select":
-        select_events()
+        select_events(args.output, args.select_only)
     else:
-        verify_pi()
+        if args.select_only:
+            parser.error("--select-only is only supported by the select stage")
+        verify_pi(args.output)

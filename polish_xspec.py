@@ -186,7 +186,7 @@ def marx_fraction(paths, output, label):
                   input_files=[str(path) for path in paths])
     (output / f"marx_fraction_{label}.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
-    print("Only a monochromatic 4-keV run is directly comparable with f_PSF(4 keV)=0.1077.")
+    print("Compare the monochromatic 4-keV result with the archived 4-keV REEF fraction.")
 
 
 def main():

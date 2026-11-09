@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: bash project_chart.sh broad 'polish_checks/rays_broad/*.fits*'
+# Usage: bash project_chart.sh broad 'polish_checks/rays_broad/*.fits*' ASOL_FILE
 # Supply fresh ChaRT realizations for each spectrum, matching the same aspect file.
 set -euo pipefail
 label=${1:?Supply broad or mono4}
@@ -7,8 +7,7 @@ pattern=${2:?Supply a quoted glob for the downloaded ChaRT FITS rayfiles}
 case "$label" in broad|mono4) ;; *) exit 2 ;; esac
 evt=$(cat products/event_path.txt)
 test -f "$evt"
-asol_candidates=(14946/primary/pcadf14946_000N001_asol1.fits*)
-asol=${asol_candidates[0]}
+asol=${3:?Supply the aspect solution used for this simulation}
 test -f "$asol"
 command -v marx
 command -v marx2fits

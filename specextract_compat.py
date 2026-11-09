@@ -12,9 +12,13 @@ import tempfile
 def main():
     command = ["specextract", *sys.argv[1:]]
     spec = importlib.util.find_spec("ciao_contrib")
+    if spec is None or not spec.submodule_search_locations:
+        raise SystemExit("Activate the CIAO Python environment with ciao-contrib installed")
     package = Path(next(iter(spec.submodule_search_locations)))
     relative = Path("_tools/merging.py")
     source = package / relative
+    if not source.is_file():
+        return subprocess.call(command)
     code = source.read_text(encoding="utf-8")
     try:
         compile(code, str(source), "exec")
